@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.1.12 (Architecture Fix)
+# Version: 3.1.14 (Final Architecture Fix)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 1, 12),
+    "version": (3, 1, 14),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -25,6 +25,7 @@ import datetime
 render_state = {
     "is_rendering": False,
     "is_paused": False,
+    "is_refreshing": False, # New flag to lock UI during refresh
     "current_item_index": -1,
     "original_scene": None,
     "original_path": None,
@@ -96,29 +97,36 @@ class RENDER_UL_render_queue(bpy.types.UIList):
 # 3. OPERATORS
 # -------------------------------------------------------------------
 
-def populate_queue_deferred(camera_list):
+def populate_queue_deferred(scene_name, camera_list):
     """This function is called by a timer to populate the queue,
     ensuring the UI has had time to update."""
-    # This is a safe way to get a valid context when called by bpy.app.timers
-    for window in bpy.context.window_manager.windows:
-        for area in window.screen.areas:
-            if area.type == 'PROPERTIES':
-                with bpy.context.temp_override(window=window, area=area):
-                    queue = bpy.context.scene.render_queue
-                    try:
-                        for cam_info in camera_list:
-                            item = queue.items.add()
-                            item.scene_name = cam_info['scene']
-                            item.camera_name = cam_info['camera']
-                            item.status = "Pending"
-                            item.progress = 0
-                        
-                        queue.eta_display = f"{len(queue.items)} items loaded. Ready to render."
-                    except (AttributeError, TypeError) as e:
-                        error_message = f"Failed to populate queue: {e}"
-                        print(f"Batch Renderer Error: {error_message}")
-                        queue.eta_display = "Error. Please check console for details."
-                return # Exit after finding the first properties area
+    global render_state
+    
+    # Access the scene directly through bpy.data, which is more stable
+    scene = bpy.data.scenes.get(scene_name)
+    if not scene:
+        print(f"Batch Renderer Error: Could not find scene '{scene_name}' during deferred populate.")
+        render_state["is_refreshing"] = False
+        return
+
+    queue = scene.render_queue
+    try:
+        for cam_info in camera_list:
+            item = queue.items.add()
+            item.scene_name = cam_info['scene']
+            item.camera_name = cam_info['camera']
+            item.status = "Pending"
+            item.progress = 0
+        
+        queue.eta_display = f"{len(queue.items)} items loaded. Ready to render."
+    except (AttributeError, TypeError) as e:
+        error_message = f"Failed to populate queue: {e}"
+        print(f"Batch Renderer Error: {error_message}")
+        queue.eta_display = "Error. Please check console for details."
+    finally:
+        # Unlock the UI now that the operation is complete
+        render_state["is_refreshing"] = False
+
 
 class RENDER_OT_refresh_queue(bpy.types.Operator):
     """Clears and re-populates the render queue using a deferred application timer
@@ -127,8 +135,17 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
     bl_label = "Refresh Render List"
     bl_description = "Scan all scenes and cameras to build the render queue"
 
+    @classmethod
+    def poll(cls, context):
+        # Disable if a render or another refresh is already running
+        return not render_state["is_rendering"] and not render_state["is_refreshing"]
+
     def execute(self, context):
+        global render_state
         queue = context.scene.render_queue
+        
+        # Lock the UI
+        render_state["is_refreshing"] = True
         
         # Clear the list immediately.
         while True:
@@ -149,7 +166,8 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
                     camera_list.append({'scene': scene.name, 'camera': obj.name})
 
         # Use bpy.app.timers to defer the population step. This is the most robust method.
-        bpy.app.timers.register(lambda: populate_queue_deferred(camera_list), first_interval=0.01)
+        # We pass the current scene name to get a valid context back in the deferred function.
+        bpy.app.timers.register(lambda: populate_queue_deferred(context.scene.name, camera_list), first_interval=0.01)
 
         self.report({'INFO'}, "Queue refresh initiated.")
         return {'FINISHED'}
@@ -164,7 +182,14 @@ class RENDER_OT_move_queue_item(bpy.types.Operator):
     
     @classmethod
     def poll(cls, context):
-        return context.scene.render_queue.items
+        # Safely poll by checking the state first.
+        if render_state["is_rendering"] or render_state["is_refreshing"]:
+            return False
+        try:
+            # This check can still fail if the property is deferred, so we wrap it.
+            return len(context.scene.render_queue.items) > 0
+        except (AttributeError, TypeError):
+            return False
     
     def execute(self, context):
         queue = context.scene.render_queue
@@ -215,9 +240,9 @@ def render_cleanup(context, cancelled=False):
         queue.eta_display = "Render queue complete."
 
     render_state = {
-        "is_rendering": False, "is_paused": False, "current_item_index": -1,
-        "original_scene": None, "original_path": None, "timer": None,
-        "job_start_time": 0, "frame_times": []
+        "is_rendering": False, "is_paused": False, "is_refreshing": False,
+        "current_item_index": -1, "original_scene": None, "original_path": None,
+        "timer": None, "job_start_time": 0, "frame_times": []
     }
     print("Batch Renderer: Cleanup complete.")
 
@@ -228,6 +253,13 @@ class RENDER_OT_render_queue_control(bpy.types.Operator):
     bl_label = "Render Control"
 
     action: bpy.props.StringProperty() # type: ignore
+
+    @classmethod
+    def poll(cls, context):
+        # Disable if a refresh is running or a render is in progress
+        if render_state["is_refreshing"] or render_state["is_rendering"]:
+            return False
+        return True
 
     def execute(self, context):
         if self.action == 'START':
@@ -337,7 +369,8 @@ class RENDER_OT_pause_resume_control(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return render_state["is_rendering"]
+        # Only allow pausing if a render is active and not refreshing
+        return render_state["is_rendering"] and not render_state["is_refreshing"]
 
     def execute(self, context):
         global render_state
@@ -462,11 +495,11 @@ class RENDER_PT_batch_render_panel(bpy.types.Panel):
         row.operator(RENDER_OT_refresh_queue.bl_idname, icon='FILE_REFRESH')
         
         if not render_state["is_rendering"]:
-            row.operator(RENDER_OT_render_queue_control.bl_idname, text="Render Queue", icon='RENDER_ANIMATION').action = 'START'
+            render_op = row.operator(RENDER_OT_render_queue_control.bl_idname, text="Render Queue", icon='RENDER_ANIMATION')
+            render_op.action = 'START'
         else:
             row.operator(RENDER_OT_render_queue_control.bl_idname, text="Cancel All", icon='X').action = 'CANCEL'
-            
-            pause_op = row.operator(RENDER_OT_pause_resume_control.bl_idname, 
+            row.operator(RENDER_OT_pause_resume_control.bl_idname, 
                                     text="Resume" if render_state["is_paused"] else "Pause", 
                                     icon='PLAY' if render_state["is_paused"] else 'PAUSE')
 
@@ -477,8 +510,10 @@ class RENDER_PT_batch_render_panel(bpy.types.Panel):
         row.template_list("RENDER_UL_render_queue", "", queue, "items", queue, "active_index")
         
         col = row.column(align=True)
-        col.operator(RENDER_OT_move_queue_item.bl_idname, icon='TRIA_UP', text="").direction = 'UP'
-        col.operator(RENDER_OT_move_queue_item.bl_idname, icon='TRIA_DOWN', text="").direction = 'DOWN'
+        move_op_up = col.operator(RENDER_OT_move_queue_item.bl_idname, icon='TRIA_UP', text="")
+        move_op_up.direction = 'UP'
+        move_op_down = col.operator(RENDER_OT_move_queue_item.bl_idname, icon='TRIA_DOWN', text="")
+        move_op_down.direction = 'DOWN'
 
 # -------------------------------------------------------------------
 # 6. REGISTRATION

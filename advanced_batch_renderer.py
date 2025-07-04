@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.1 (Bugfix)
+# Version: 3.1.1 (Bugfix)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 1, 0),
+    "version": (3, 1, 1),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -125,7 +125,6 @@ class RENDER_OT_move_queue_item(bpy.types.Operator):
     bl_idname = "render.move_queue_item"
     bl_label = "Move Queue Item"
     
-    # Corrected Syntax: Use ':' for Operator properties
     direction: bpy.props.EnumProperty(items=(('UP', 'Up', ''), ('DOWN', 'Down', ''))) # type: ignore
     
     @classmethod
@@ -193,7 +192,6 @@ class RENDER_OT_render_queue_control(bpy.types.Operator):
     bl_idname = "render.render_queue_control"
     bl_label = "Render Control"
 
-    # Corrected Syntax: Use ':' for Operator properties
     action: bpy.props.StringProperty() # type: ignore
 
     def execute(self, context):
@@ -437,7 +435,8 @@ class RENDER_PT_batch_render_panel(bpy.types.Panel):
                                     text="Resume" if render_state["is_paused"] else "Pause", 
                                     icon='PLAY' if render_state["is_paused"] else 'PAUSE')
 
-        layout.row().label(text=queue.eta_display, icon='INFO')
+        # Corrected UI drawing for the ETA display
+        layout.prop(queue, "eta_display", text="", icon='INFO')
 
         row = layout.row()
         row.template_list("RENDER_UL_render_queue", "", queue, "items", queue, "active_index")

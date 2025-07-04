@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.0
+# Version: 3.1 (Bugfix)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 0),
+    "version": (3, 1, 0),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -124,7 +124,9 @@ class RENDER_OT_move_queue_item(bpy.types.Operator):
     """Moves an item up or down in the render queue."""
     bl_idname = "render.move_queue_item"
     bl_label = "Move Queue Item"
-    direction = bpy.props.EnumProperty(items=(('UP', 'Up', ''), ('DOWN', 'Down', '')))
+    
+    # Corrected Syntax: Use ':' for Operator properties
+    direction: bpy.props.EnumProperty(items=(('UP', 'Up', ''), ('DOWN', 'Down', ''))) # type: ignore
     
     @classmethod
     def poll(cls, context):
@@ -163,7 +165,6 @@ def render_cleanup(context, cancelled=False):
     if render_state["original_path"] and context.window.scene:
         context.window.scene.render.filepath = render_state["original_path"]
         
-    # Safely remove handlers
     if on_render_pre in bpy.app.handlers.render_pre:
         bpy.app.handlers.render_pre.remove(on_render_pre)
     if on_render_post in bpy.app.handlers.render_post:
@@ -192,7 +193,8 @@ class RENDER_OT_render_queue_control(bpy.types.Operator):
     bl_idname = "render.render_queue_control"
     bl_label = "Render Control"
 
-    action = bpy.props.StringProperty()
+    # Corrected Syntax: Use ':' for Operator properties
+    action: bpy.props.StringProperty() # type: ignore
 
     def execute(self, context):
         if self.action == 'START':
@@ -249,7 +251,6 @@ class RENDER_OT_render_queue_control(bpy.types.Operator):
         return {'PASS_THROUGH'}
 
     def update_eta(self, context):
-        """Calculates and updates the ETA string."""
         if not render_state["is_rendering"] or render_state["is_paused"]:
             return
 

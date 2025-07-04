@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.1.2 (Bugfix)
+# Version: 3.1.4 (Bugfix)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 1, 2),
+    "version": (3, 1, 4),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -105,9 +105,14 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
     def execute(self, context):
         queue = context.scene.render_queue
         
-        # Corrected: Clear items individually to avoid '_PropertyDeferred' error
-        while len(queue.items) > 0:
-            queue.items.remove(0)
+        # Corrected: Use a try/except block that also handles AttributeError
+        while True:
+            try:
+                queue.items.remove(0)
+            except (IndexError, AttributeError):
+                # IndexError means the collection is empty.
+                # AttributeError means it's a _PropertyDeferred, which we can also treat as empty.
+                break
 
         render_state["frame_times"].clear()
 
@@ -120,7 +125,12 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
                     item.status = "Pending"
                     item.progress = 0
         
-        queue.eta_display = f"{len(queue.items)} items loaded. Ready to render."
+        # This line might fail if the queue is still deferred, so we wrap it
+        try:
+            queue.eta_display = f"{len(queue.items)} items loaded. Ready to render."
+        except TypeError:
+            queue.eta_display = "Queue populated. Ready to render."
+
         self.report({'INFO'}, "Render queue refreshed.")
         return {'FINISHED'}
 

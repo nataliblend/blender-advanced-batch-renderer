@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.1.4 (Bugfix)
+# Version: 3.1.5 (Bugfix)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 1, 4),
+    "version": (3, 1, 5),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -105,7 +105,7 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
     def execute(self, context):
         queue = context.scene.render_queue
         
-        # Corrected: Use a try/except block that also handles AttributeError
+        # Use a try/except block for the most robust way to clear the collection
         while True:
             try:
                 queue.items.remove(0)
@@ -113,23 +113,27 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
                 # IndexError means the collection is empty.
                 # AttributeError means it's a _PropertyDeferred, which we can also treat as empty.
                 break
+        
+        # Force a dependency graph update to ensure the collection is ready for adding
+        context.view_layer.update()
 
         render_state["frame_times"].clear()
 
-        for scene in bpy.data.scenes:
-            for obj in scene.objects:
-                if obj.type == 'CAMERA':
-                    item = queue.items.add()
-                    item.scene_name = scene.name
-                    item.camera_name = obj.name
-                    item.status = "Pending"
-                    item.progress = 0
-        
-        # This line might fail if the queue is still deferred, so we wrap it
         try:
+            for scene in bpy.data.scenes:
+                for obj in scene.objects:
+                    if obj.type == 'CAMERA':
+                        item = queue.items.add()
+                        item.scene_name = scene.name
+                        item.camera_name = obj.name
+                        item.status = "Pending"
+                        item.progress = 0
+            
             queue.eta_display = f"{len(queue.items)} items loaded. Ready to render."
-        except TypeError:
-            queue.eta_display = "Queue populated. Ready to render."
+        except (AttributeError, TypeError):
+            # This can happen if the UI is still not ready after the update.
+            self.report({'ERROR'}, "UI not ready. Please click 'Refresh' again.")
+            return {'CANCELLED'}
 
         self.report({'INFO'}, "Render queue refreshed.")
         return {'FINISHED'}

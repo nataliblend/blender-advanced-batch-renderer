@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.1.5 (Bugfix)
+# Version: 3.1.7 (UX Feedback)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 1, 5),
+    "version": (3, 1, 7),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -97,46 +97,67 @@ class RENDER_UL_render_queue(bpy.types.UIList):
 # -------------------------------------------------------------------
 
 class RENDER_OT_refresh_queue(bpy.types.Operator):
-    """Clears and re-populates the render queue from all scenes."""
+    """Clears and re-populates the render queue using a deferred modal timer
+    to avoid race conditions with Blender's UI data system."""
     bl_idname = "render.refresh_queue"
     bl_label = "Refresh Render List"
     bl_description = "Scan all scenes and cameras to build the render queue"
 
-    def execute(self, context):
+    _timer = None
+
+    def modal(self, context, event):
+        if event.type == 'TIMER':
+            queue = context.scene.render_queue
+            
+            # Now, populate the list. The properties should be resolved.
+            try:
+                for scene in bpy.data.scenes:
+                    for obj in scene.objects:
+                        if obj.type == 'CAMERA':
+                            item = queue.items.add()
+                            item.scene_name = scene.name
+                            item.camera_name = obj.name
+                            item.status = "Pending"
+                            item.progress = 0
+                
+                queue.eta_display = f"{len(queue.items)} items loaded. Ready to render."
+                self.report({'INFO'}, "Render queue refreshed.")
+
+            except (AttributeError, TypeError):
+                self.report({'ERROR'}, "Failed to populate queue. Please try again.")
+                queue.eta_display = "Error. Please Refresh again."
+
+            # Cleanup and finish
+            context.window_manager.event_timer_remove(self._timer)
+            return {'FINISHED'}
+
+        elif event.type in {'RIGHTMOUSE', 'ESC'}:
+            context.window_manager.event_timer_remove(self._timer)
+            self.report({'INFO'}, "Refresh cancelled.")
+            context.scene.render_queue.eta_display = "Refresh cancelled."
+            return {'CANCELLED'}
+
+        return {'PASS_THROUGH'}
+
+    def invoke(self, context, event):
         queue = context.scene.render_queue
         
-        # Use a try/except block for the most robust way to clear the collection
+        # Clear the list immediately.
         while True:
             try:
                 queue.items.remove(0)
             except (IndexError, AttributeError):
-                # IndexError means the collection is empty.
-                # AttributeError means it's a _PropertyDeferred, which we can also treat as empty.
                 break
         
-        # Force a dependency graph update to ensure the collection is ready for adding
-        context.view_layer.update()
-
+        # Set the loading message to provide instant user feedback
+        queue.eta_display = "Loading..."
+        
         render_state["frame_times"].clear()
-
-        try:
-            for scene in bpy.data.scenes:
-                for obj in scene.objects:
-                    if obj.type == 'CAMERA':
-                        item = queue.items.add()
-                        item.scene_name = scene.name
-                        item.camera_name = obj.name
-                        item.status = "Pending"
-                        item.progress = 0
-            
-            queue.eta_display = f"{len(queue.items)} items loaded. Ready to render."
-        except (AttributeError, TypeError):
-            # This can happen if the UI is still not ready after the update.
-            self.report({'ERROR'}, "UI not ready. Please click 'Refresh' again.")
-            return {'CANCELLED'}
-
-        self.report({'INFO'}, "Render queue refreshed.")
-        return {'FINISHED'}
+        
+        # Add a modal timer to defer the population step, giving the UI time to update.
+        self._timer = context.window_manager.event_timer_add(0.01, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
 
 class RENDER_OT_move_queue_item(bpy.types.Operator):
     """Moves an item up or down in the render queue."""
@@ -487,3 +508,4 @@ def unregister():
 
 if __name__ == "__main__":
     register()
+    

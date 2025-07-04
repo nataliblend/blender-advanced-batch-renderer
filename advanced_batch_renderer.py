@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.1.1 (Bugfix)
+# Version: 3.1.2 (Bugfix)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 1, 1),
+    "version": (3, 1, 2),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -104,7 +104,11 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
 
     def execute(self, context):
         queue = context.scene.render_queue
-        queue.items.clear()
+        
+        # Corrected: Clear items individually to avoid '_PropertyDeferred' error
+        while len(queue.items) > 0:
+            queue.items.remove(0)
+
         render_state["frame_times"].clear()
 
         for scene in bpy.data.scenes:

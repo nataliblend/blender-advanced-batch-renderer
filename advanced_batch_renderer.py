@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.1.7 (UX Feedback)
+# Version: 3.1.9 (Improved Error Reporting)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 1, 7),
+    "version": (3, 1, 9),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -98,7 +98,7 @@ class RENDER_UL_render_queue(bpy.types.UIList):
 
 class RENDER_OT_refresh_queue(bpy.types.Operator):
     """Clears and re-populates the render queue using a deferred modal timer
-    to avoid race conditions with Blender's UI data system."""
+    to avoid race conditions and provide detailed error reporting."""
     bl_idname = "render.refresh_queue"
     bl_label = "Refresh Render List"
     bl_description = "Scan all scenes and cameras to build the render queue"
@@ -109,23 +109,31 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
         if event.type == 'TIMER':
             queue = context.scene.render_queue
             
-            # Now, populate the list. The properties should be resolved.
             try:
+                # Gather data into a simple python list first
+                camera_list = []
                 for scene in bpy.data.scenes:
                     for obj in scene.objects:
                         if obj.type == 'CAMERA':
-                            item = queue.items.add()
-                            item.scene_name = scene.name
-                            item.camera_name = obj.name
-                            item.status = "Pending"
-                            item.progress = 0
+                            camera_list.append({'scene': scene.name, 'camera': obj.name})
+
+                # Now, populate the list from the safe data
+                for cam_info in camera_list:
+                    item = queue.items.add()
+                    item.scene_name = cam_info['scene']
+                    item.camera_name = cam_info['camera']
+                    item.status = "Pending"
+                    item.progress = 0
                 
                 queue.eta_display = f"{len(queue.items)} items loaded. Ready to render."
                 self.report({'INFO'}, "Render queue refreshed.")
 
-            except (AttributeError, TypeError):
-                self.report({'ERROR'}, "Failed to populate queue. Please try again.")
-                queue.eta_display = "Error. Please Refresh again."
+            except (AttributeError, TypeError) as e:
+                # Provide a detailed error message to the user and in the console
+                error_message = f"Failed to populate queue: {e}"
+                self.report({'ERROR'}, error_message)
+                print(f"Batch Renderer Error: {error_message}")
+                queue.eta_display = "Error. Please check console for details."
 
             # Cleanup and finish
             context.window_manager.event_timer_remove(self._timer)
@@ -151,7 +159,6 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
         
         # Set the loading message to provide instant user feedback
         queue.eta_display = "Loading..."
-        
         render_state["frame_times"].clear()
         
         # Add a modal timer to defer the population step, giving the UI time to update.
@@ -508,4 +515,3 @@ def unregister():
 
 if __name__ == "__main__":
     register()
-    

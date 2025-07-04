@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.1.9 (Improved Error Reporting)
+# Version: 3.1.10 (Final Bugfix)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 1, 9),
+    "version": (3, 1, 10),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -110,6 +110,10 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
             queue = context.scene.render_queue
             
             try:
+                # This line is a 'nudge' to force Blender to resolve the CollectionProperty.
+                # Accessing its length before modifying it can prevent the '_PropertyDeferred' error.
+                _ = len(queue.items)
+
                 # Gather data into a simple python list first
                 camera_list = []
                 for scene in bpy.data.scenes:

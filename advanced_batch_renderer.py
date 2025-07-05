@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.2.0 (MVP Test)
+# Version: 3.2.1 (Stability Fix)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 2, 0),
+    "version": (3, 2, 1),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -25,7 +25,6 @@ import datetime
 render_state = {
     "is_rendering": False,
     "is_paused": False,
-    "is_refreshing": False,
     "current_item_index": -1,
     "original_scene": None,
     "original_path": None,
@@ -98,10 +97,10 @@ class RENDER_UL_render_queue(bpy.types.UIList):
 # -------------------------------------------------------------------
 
 class RENDER_OT_refresh_queue(bpy.types.Operator):
-    """(Simplified) Clears and re-populates the queue from the ACTIVE SCENE ONLY."""
+    """(Direct Method) Clears and re-populates the queue from ALL scenes."""
     bl_idname = "render.refresh_queue"
     bl_label = "Refresh Render List"
-    bl_description = "Scan the active scene for cameras to build the render queue"
+    bl_description = "Scan all scenes for cameras to build the render queue"
 
     @classmethod
     def poll(cls, context):
@@ -111,20 +110,23 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
         queue = context.scene.render_queue
         
         # Direct, simple clearing and population
-        queue.items.clear()
+        try:
+            queue.items.clear()
+        except AttributeError:
+            # This handles the case where the property is deferred on the first run
+            pass
+
+        for scene in bpy.data.scenes:
+            for obj in scene.objects:
+                if obj.type == 'CAMERA':
+                    item = queue.items.add()
+                    item.scene_name = scene.name
+                    item.camera_name = obj.name
+                    item.status = "Pending"
+                    item.progress = 0
         
-        active_scene = context.scene
-        
-        for obj in active_scene.objects:
-            if obj.type == 'CAMERA':
-                item = queue.items.add()
-                item.scene_name = active_scene.name
-                item.camera_name = obj.name
-                item.status = "Pending"
-                item.progress = 0
-        
-        queue.eta_display = f"{len(queue.items)} items loaded from '{active_scene.name}'."
-        self.report({'INFO'}, f"Refreshed list from active scene '{active_scene.name}'.")
+        queue.eta_display = f"{len(queue.items)} items loaded from all scenes."
+        self.report({'INFO'}, "Refreshed list from all scenes.")
         return {'FINISHED'}
 
 
@@ -137,9 +139,13 @@ class RENDER_OT_move_queue_item(bpy.types.Operator):
     
     @classmethod
     def poll(cls, context):
+        # Safely poll to prevent UI errors
         if render_state["is_rendering"]:
             return False
-        return len(context.scene.render_queue.items) > 0
+        try:
+            return len(context.scene.render_queue.items) > 0
+        except (AttributeError, TypeError):
+            return False
     
     def execute(self, context):
         queue = context.scene.render_queue
@@ -190,7 +196,7 @@ def render_cleanup(context, cancelled=False):
         queue.eta_display = "Render queue complete."
 
     render_state = {
-        "is_rendering": False, "is_paused": False, "is_refreshing": False,
+        "is_rendering": False, "is_paused": False,
         "current_item_index": -1, "original_scene": None, "original_path": None,
         "render_timer": None, "job_start_time": 0, "frame_times": []
     }
@@ -459,7 +465,7 @@ class RENDER_PT_batch_render_panel(bpy.types.Panel):
         list_container = layout.column()
         
         # Disable the entire container when a render or refresh is active
-        list_container.enabled = not (render_state["is_rendering"] or render_state["is_refreshing"])
+        list_container.enabled = not render_state["is_rendering"]
         
         row = list_container.row()
         row.template_list("RENDER_UL_render_queue", "", queue, "items", queue, "active_index")

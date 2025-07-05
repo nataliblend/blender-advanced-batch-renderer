@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.1.15 (Final Architecture Fix)
+# Version: 3.1.16 (UI Fix)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 1, 15),
+    "version": (3, 1, 16),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -101,6 +101,7 @@ def populate_queue_deferred(camera_list):
     """This function is called by a timer to populate the queue,
     ensuring the UI has had time to update."""
     global render_state
+    
     # This is a safe way to get a valid context when called by bpy.app.timers
     for window in bpy.context.window_manager.windows:
         for area in window.screen.areas:
@@ -129,63 +130,48 @@ def populate_queue_deferred(camera_list):
     render_state["is_refreshing"] = False
 
 class RENDER_OT_refresh_queue(bpy.types.Operator):
-    """Clears and re-populates the render queue using a deferred modal timer
+    """Clears and re-populates the render queue using a deferred application timer
     to avoid race conditions with Blender's UI data system."""
     bl_idname = "render.refresh_queue"
     bl_label = "Refresh Render List"
     bl_description = "Scan all scenes and cameras to build the render queue"
 
-    _timer = None
-    _camera_list = []
-
     @classmethod
     def poll(cls, context):
+        # Disable if a render or another refresh is already running
         return not render_state["is_rendering"] and not render_state["is_refreshing"]
 
-    def modal(self, context, event):
-        if event.type == 'TIMER':
-            # The timer has finished, now we can safely populate the list.
-            # We call the separate function to do this.
-            populate_queue_deferred(self._camera_list)
-            
-            # Cleanup and finish the modal operator
-            context.window_manager.event_timer_remove(self._timer)
-            return {'FINISHED'}
-
-        elif event.type in {'RIGHTMOUSE', 'ESC'}:
-            render_state["is_refreshing"] = False
-            context.window_manager.event_timer_remove(self._timer)
-            self.report({'INFO'}, "Refresh cancelled.")
-            context.scene.render_queue.eta_display = "Refresh cancelled."
-            return {'CANCELLED'}
-
-        return {'PASS_THROUGH'}
-
-    def invoke(self, context, event):
+    def execute(self, context):
         global render_state
         queue = context.scene.render_queue
         
+        # Lock the UI
         render_state["is_refreshing"] = True
         
+        # Clear the list immediately.
         while True:
             try:
                 queue.items.remove(0)
             except (IndexError, AttributeError):
                 break
         
+        # Set the loading message to provide instant user feedback
         queue.eta_display = "Loading..."
         render_state["frame_times"].clear()
         
-        self._camera_list = []
+        # Gather data into a simple python list first
+        camera_list = []
         for scene in bpy.data.scenes:
             for obj in scene.objects:
                 if obj.type == 'CAMERA':
-                    self._camera_list.append({'scene': scene.name, 'camera': obj.name})
+                    camera_list.append({'scene': scene.name, 'camera': obj.name})
 
-        self._timer = context.window_manager.event_timer_add(0.01, window=context.window)
-        context.window_manager.modal_handler_add(self)
+        # Use bpy.app.timers to defer the population step. This is the most robust method.
+        # We pass the current scene name to get a valid context back in the deferred function.
+        bpy.app.timers.register(lambda: populate_queue_deferred(context.scene.name, camera_list), first_interval=0.01)
+
         self.report({'INFO'}, "Queue refresh initiated.")
-        return {'RUNNING_MODAL'}
+        return {'FINISHED'}
 
 
 class RENDER_OT_move_queue_item(bpy.types.Operator):
@@ -197,9 +183,11 @@ class RENDER_OT_move_queue_item(bpy.types.Operator):
     
     @classmethod
     def poll(cls, context):
+        # Safely poll by checking the state first.
         if render_state["is_rendering"] or render_state["is_refreshing"]:
             return False
         try:
+            # This check can still fail if the property is deferred, so we wrap it.
             return len(context.scene.render_queue.items) > 0
         except (AttributeError, TypeError):
             return False
@@ -269,11 +257,9 @@ class RENDER_OT_render_queue_control(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
+        # Disable if a refresh is running
         if render_state["is_refreshing"]:
             return False
-        # Allow 'Cancel' to be clickable even if a render is in progress
-        if render_state["is_rendering"]:
-            return True
         return True
 
     def execute(self, context):
@@ -511,7 +497,7 @@ class RENDER_PT_batch_render_panel(bpy.types.Panel):
         row = layout.row(align=True)
         
         # Draw operators and manage their enabled state
-        refresh_op = row.operator(RENDER_OT_refresh_queue.bl_idname, icon='FILE_REFRESH')
+        row.operator(RENDER_OT_refresh_queue.bl_idname, icon='FILE_REFRESH')
         
         if not render_state["is_rendering"]:
             render_op = row.operator(RENDER_OT_render_queue_control.bl_idname, text="Render Queue", icon='RENDER_ANIMATION')
@@ -526,18 +512,20 @@ class RENDER_PT_batch_render_panel(bpy.types.Panel):
 
         layout.prop(queue, "eta_display", text="", icon='INFO')
 
-        row = layout.row()
+        # Create a container for the list and its controls
+        list_container = layout.column()
         
-        # Disable the list and move buttons during refresh/render
-        ui_list = row.template_list("RENDER_UL_render_queue", "", queue, "items", queue, "active_index")
-        ui_list.enabled = not (render_state["is_rendering"] or render_state["is_refreshing"])
+        # Disable the entire container when a render or refresh is active
+        list_container.enabled = not (render_state["is_rendering"] or render_state["is_refreshing"])
+        
+        row = list_container.row()
+        row.template_list("RENDER_UL_render_queue", "", queue, "items", queue, "active_index")
         
         col = row.column(align=True)
         move_op_up = col.operator(RENDER_OT_move_queue_item.bl_idname, icon='TRIA_UP', text="")
         move_op_up.direction = 'UP'
         move_op_down = col.operator(RENDER_OT_move_queue_item.bl_idname, icon='TRIA_DOWN', text="")
         move_op_down.direction = 'DOWN'
-        col.enabled = not (render_state["is_rendering"] or render_state["is_refreshing"])
 
 
 # -------------------------------------------------------------------

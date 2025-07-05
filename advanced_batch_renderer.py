@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.1.16 (UI Fix)
+# Version: 3.1.17 (Stability Fix)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 1, 16),
+    "version": (3, 1, 17),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -25,7 +25,7 @@ import datetime
 render_state = {
     "is_rendering": False,
     "is_paused": False,
-    "is_refreshing": False, # New flag to lock UI during refresh
+    "is_refreshing": False, # Flag to lock UI during refresh
     "current_item_index": -1,
     "original_scene": None,
     "original_path": None,
@@ -97,37 +97,37 @@ class RENDER_UL_render_queue(bpy.types.UIList):
 # 3. OPERATORS
 # -------------------------------------------------------------------
 
-def populate_queue_deferred(camera_list):
-    """This function is called by a timer to populate the queue,
-    ensuring the UI has had time to update."""
+def populate_queue_deferred(scene_name, camera_list):
+    """This function is called by a timer to populate the queue.
+    It's designed to be robust and always unlock the UI."""
     global render_state
     
-    # This is a safe way to get a valid context when called by bpy.app.timers
-    for window in bpy.context.window_manager.windows:
-        for area in window.screen.areas:
-            if area.type == 'PROPERTIES':
-                with bpy.context.temp_override(window=window, area=area):
-                    queue = bpy.context.scene.render_queue
-                    try:
-                        for cam_info in camera_list:
-                            item = queue.items.add()
-                            item.scene_name = cam_info['scene']
-                            item.camera_name = cam_info['camera']
-                            item.status = "Pending"
-                            item.progress = 0
-                        
-                        queue.eta_display = f"{len(queue.items)} items loaded. Ready to render."
-                    except (AttributeError, TypeError) as e:
-                        error_message = f"Failed to populate queue: {e}"
-                        print(f"Batch Renderer Error: {error_message}")
-                        queue.eta_display = "Error. Please check console for details."
-                    finally:
-                        # Unlock the UI now that the operation is complete
-                        render_state["is_refreshing"] = False
-                return # Exit after finding the first properties area
+    scene = bpy.data.scenes.get(scene_name)
+    if not scene:
+        print(f"Batch Renderer Error: Could not find scene '{scene_name}' during deferred populate.")
+        render_state["is_refreshing"] = False
+        return
+
+    queue = scene.render_queue
+    try:
+        for cam_info in camera_list:
+            item = queue.items.add()
+            item.scene_name = cam_info['scene']
+            item.camera_name = cam_info['camera']
+            item.status = "Pending"
+            item.progress = 0
+        
+        queue.eta_display = f"{len(queue.items)} items loaded. Ready to render."
+    except (AttributeError, TypeError) as e:
+        error_message = f"Failed to populate queue: {e}"
+        print(f"Batch Renderer Error: {error_message}")
+        queue.eta_display = "Error. Please check console for details."
+    finally:
+        # This is critical: always unlock the UI, even if an error occurred.
+        render_state["is_refreshing"] = False
     
-    # Fallback in case no properties area is found
-    render_state["is_refreshing"] = False
+    # Returning None ensures the timer is only run once.
+    return None
 
 class RENDER_OT_refresh_queue(bpy.types.Operator):
     """Clears and re-populates the render queue using a deferred application timer
@@ -138,35 +138,29 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        # Disable if a render or another refresh is already running
         return not render_state["is_rendering"] and not render_state["is_refreshing"]
 
     def execute(self, context):
         global render_state
         queue = context.scene.render_queue
         
-        # Lock the UI
         render_state["is_refreshing"] = True
         
-        # Clear the list immediately.
         while True:
             try:
                 queue.items.remove(0)
             except (IndexError, AttributeError):
                 break
         
-        # Set the loading message to provide instant user feedback
         queue.eta_display = "Loading..."
         render_state["frame_times"].clear()
         
-        # Gather data into a simple python list first
         camera_list = []
         for scene in bpy.data.scenes:
             for obj in scene.objects:
                 if obj.type == 'CAMERA':
                     camera_list.append({'scene': scene.name, 'camera': obj.name})
 
-        # Use bpy.app.timers to defer the population step. This is the most robust method.
         # We pass the current scene name to get a valid context back in the deferred function.
         bpy.app.timers.register(lambda: populate_queue_deferred(context.scene.name, camera_list), first_interval=0.01)
 
@@ -183,11 +177,9 @@ class RENDER_OT_move_queue_item(bpy.types.Operator):
     
     @classmethod
     def poll(cls, context):
-        # Safely poll by checking the state first.
         if render_state["is_rendering"] or render_state["is_refreshing"]:
             return False
         try:
-            # This check can still fail if the property is deferred, so we wrap it.
             return len(context.scene.render_queue.items) > 0
         except (AttributeError, TypeError):
             return False
@@ -257,7 +249,6 @@ class RENDER_OT_render_queue_control(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        # Disable if a refresh is running
         if render_state["is_refreshing"]:
             return False
         return True

@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.1.17 (Stability Fix)
+# Version: 3.1.18 (Final Stability Fix)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 1, 17),
+    "version": (3, 1, 18),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -102,11 +102,12 @@ def populate_queue_deferred(scene_name, camera_list):
     It's designed to be robust and always unlock the UI."""
     global render_state
     
+    # Access the scene directly through bpy.data, which is more stable
     scene = bpy.data.scenes.get(scene_name)
     if not scene:
         print(f"Batch Renderer Error: Could not find scene '{scene_name}' during deferred populate.")
         render_state["is_refreshing"] = False
-        return
+        return None # Returning None ensures the timer is only run once.
 
     queue = scene.render_queue
     try:
@@ -126,7 +127,6 @@ def populate_queue_deferred(scene_name, camera_list):
         # This is critical: always unlock the UI, even if an error occurred.
         render_state["is_refreshing"] = False
     
-    # Returning None ensures the timer is only run once.
     return None
 
 class RENDER_OT_refresh_queue(bpy.types.Operator):
@@ -146,6 +146,11 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
         
         render_state["is_refreshing"] = True
         
+        # Force an immediate UI redraw to disable buttons
+        for window in context.window_manager.windows:
+            for area in window.screen.areas:
+                area.tag_redraw()
+        
         while True:
             try:
                 queue.items.remove(0)
@@ -161,7 +166,6 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
                 if obj.type == 'CAMERA':
                     camera_list.append({'scene': scene.name, 'camera': obj.name})
 
-        # We pass the current scene name to get a valid context back in the deferred function.
         bpy.app.timers.register(lambda: populate_queue_deferred(context.scene.name, camera_list), first_interval=0.01)
 
         self.report({'INFO'}, "Queue refresh initiated.")

@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 4.2.0 (Final Architecture)
+# Version: 4.2.1 (Stable Architecture)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (4, 2, 0),
+    "version": (4, 2, 1),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -105,6 +105,7 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
 
     _timer = None
     _camera_list = []
+    _scene_name: str
 
     @classmethod
     def poll(cls, context):
@@ -113,7 +114,15 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
     def modal(self, context, event):
         global render_state
         if event.type == 'TIMER':
-            queue = context.scene.render_queue
+            # It's more robust to access the scene directly from bpy.data
+            scene = bpy.data.scenes.get(self._scene_name)
+            if not scene:
+                self.report({'ERROR'}, f"Could not find scene: {self._scene_name}")
+                render_state["is_refreshing"] = False
+                context.window_manager.event_timer_remove(self._timer)
+                return {'CANCELLED'}
+
+            queue = scene.render_queue
             try:
                 for cam_info in self._camera_list:
                     item = queue.items.add()
@@ -149,8 +158,8 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
         queue = context.scene.render_queue
         
         render_state["is_refreshing"] = True
+        self._scene_name = context.scene.name
         
-        # This loop is now safe because the UI is locked by the modal state
         while True:
             try:
                 queue.items.clear()
@@ -227,11 +236,11 @@ def render_cleanup(context, cancelled=False):
     if render_state["original_path"] and context.window.scene:
         context.window.scene.render.filepath = render_state["original_path"]
         
-    if on_render_pre in bpy.app.handlers.render_pre:
+    if 'on_render_pre' in globals() and on_render_pre in bpy.app.handlers.render_pre:
         bpy.app.handlers.render_pre.remove(on_render_pre)
-    if on_render_post in bpy.app.handlers.render_post:
+    if 'on_render_post' in globals() and on_render_post in bpy.app.handlers.render_post:
         bpy.app.handlers.render_post.remove(on_render_post)
-    if on_render_cancel in bpy.app.handlers.render_cancel:
+    if 'on_render_cancel' in globals() and on_render_cancel in bpy.app.handlers.render_cancel:
         bpy.app.handlers.render_cancel.remove(on_render_cancel)
     
     queue = context.scene.render_queue

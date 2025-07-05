@@ -1,13 +1,13 @@
 # Blender Add-on: Advanced Batch Renderer
 #
-# Version: 3.2.3 (Critical Fix)
+# Version: 3.2.5 (Cleanup Fix)
 # Description: A production-focused batch rendering tool with a render queue,
 #              pause/resume functionality, and a running ETA calculation.
 
 bl_info = {
     "name": "Advanced Batch Renderer",
     "author": "Natali Vitoria (with guidance from a Mentor)",
-    "version": (3, 2, 3),
+    "version": (3, 2, 5),
     "blender": (4, 4, 0),
     "location": "Properties > Render Properties > Batch Rendering",
     "description": "Adds a render queue with pause/resume and ETA.",
@@ -97,39 +97,6 @@ class RENDER_UL_render_queue(bpy.types.UIList):
 # 3. OPERATORS
 # -------------------------------------------------------------------
 
-def populate_queue_deferred(camera_list):
-    """This function is called by a timer to populate the queue.
-    It's designed to be robust and always unlock the UI."""
-    global render_state
-    
-    # This is a safe way to get a valid context when called by bpy.app.timers
-    for window in bpy.context.window_manager.windows:
-        for area in window.screen.areas:
-            if area.type == 'PROPERTIES':
-                with bpy.context.temp_override(window=window, area=area):
-                    queue = bpy.context.scene.render_queue
-                    try:
-                        for cam_info in camera_list:
-                            item = queue.items.add()
-                            item.scene_name = cam_info['scene']
-                            item.camera_name = cam_info['camera']
-                            item.status = "Pending"
-                            item.progress = 0
-                        
-                        queue.eta_display = f"{len(queue.items)} items loaded. Ready to render."
-                    except (AttributeError, TypeError) as e:
-                        error_message = f"Failed to populate queue: {e}"
-                        print(f"Batch Renderer Error: {error_message}")
-                        queue.eta_display = "Error. Please check console for details."
-                    finally:
-                        # This is critical: always unlock the UI, even if an error occurred.
-                        render_state["is_refreshing"] = False
-                return # Exit after finding the first properties area
-    
-    # Fallback in case no properties area is found
-    render_state["is_refreshing"] = False
-    return None # Returning None ensures the timer is only run once.
-
 class RENDER_OT_refresh_queue(bpy.types.Operator):
     """(Modal) Clears and re-populates the queue to avoid race conditions."""
     bl_idname = "render.refresh_queue"
@@ -146,11 +113,26 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
     def modal(self, context, event):
         global render_state
         if event.type == 'TIMER':
-            # The timer has finished, now we can safely populate the list.
-            populate_queue_deferred(self._camera_list)
+            queue = context.scene.render_queue
+            try:
+                for cam_info in self._camera_list:
+                    item = queue.items.add()
+                    item.scene_name = cam_info['scene']
+                    item.camera_name = cam_info['camera']
+                    item.status = "Pending"
+                    item.progress = 0
+                
+                queue.eta_display = f"{len(queue.items)} items loaded. Ready to render."
+                self.report({'INFO'}, "Render queue refreshed.")
+            except (AttributeError, TypeError) as e:
+                error_message = f"Failed to populate queue: {e}"
+                print(f"Batch Renderer Error: {error_message}")
+                queue.eta_display = "Error. Please check console for details."
+            finally:
+                # This is the crucial step to unlock the UI
+                render_state["is_refreshing"] = False
+                context.window_manager.event_timer_remove(self._timer)
             
-            # Cleanup and finish the modal operator
-            context.window_manager.event_timer_remove(self._timer)
             return {'FINISHED'}
 
         elif event.type in {'RIGHTMOUSE', 'ESC'}:
@@ -170,13 +152,18 @@ class RENDER_OT_refresh_queue(bpy.types.Operator):
         
         while True:
             try:
-                queue.items.remove(0)
-            except IndexError:
-                # This is the expected way to exit when the list is empty.
-                break
+                queue.items.clear()
+                break # Exit loop if clear() succeeds
             except AttributeError:
                 # This handles the _PropertyDeferred case on first run.
-                break
+                # We try to clear item by item as a fallback.
+                try:
+                    while queue.items:
+                        queue.items.remove(0)
+                except (AttributeError, IndexError):
+                    break # Exit if fallback also fails or list is empty
+            except IndexError:
+                break # Exit if list is already empty
         
         queue.eta_display = "Loading..."
         render_state["frame_times"].clear()
@@ -560,9 +547,7 @@ def register():
     bpy.types.Scene.render_queue = bpy.props.PointerProperty(type=RenderQueuePropertyGroup)
 
 def unregister():
-    # Ensure timers are cleaned up if the addon is disabled
-    if 'populate_queue_deferred' in locals() and bpy.app.timers.is_registered(populate_queue_deferred):
-        bpy.app.timers.unregister(populate_queue_deferred)
+    # Corrected unregister function
     if render_state["is_rendering"]:
         render_cleanup(bpy.context, cancelled=True)
     
